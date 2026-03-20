@@ -33,9 +33,10 @@ function json_response(array $payload, int $statusCode = 200): void
     exit;
 }
 
-function sanitize_string(string $value): string
+function sanitize_string(string $value, int $maxLength = 255): string
 {
-    return trim(filter_var($value, FILTER_SANITIZE_FULL_SPECIAL_CHARS));
+    $sanitized = trim((string)filter_var($value, FILTER_SANITIZE_FULL_SPECIAL_CHARS));
+    return mb_substr($sanitized, 0, $maxLength);
 }
 
 function generate_session_id(): string
@@ -46,6 +47,11 @@ function generate_session_id(): string
 function generate_join_code(): string
 {
     return strtoupper(substr(bin2hex(random_bytes(4)), 0, 6));
+}
+
+function generate_access_token(): string
+{
+    return bin2hex(random_bytes(24));
 }
 
 function session_file_path(string $sessionId): string
@@ -74,19 +80,35 @@ function detect_file_category(string $extension): string
 function estimate_total_slides(array $metadata): int
 {
     return match ($metadata['category'] ?? 'document') {
-        'pdf' => 1,
-        'presentation' => 1,
-        'image' => 1,
-        'video', 'audio' => 1,
+        'pdf', 'presentation' => 1,
+        'image', 'video', 'audio' => 1,
         default => 1,
     };
 }
 
 function format_seconds(int $seconds): string
 {
-    $minutes = intdiv($seconds, 60);
+    $hours = intdiv($seconds, 3600);
+    $minutes = intdiv($seconds % 3600, 60);
     $remaining = $seconds % 60;
-    return sprintf('%02d:%02d', $minutes, $remaining);
+
+    return $hours > 0
+        ? sprintf('%02d:%02d:%02d', $hours, $minutes, $remaining)
+        : sprintf('%02d:%02d', $minutes, $remaining);
+}
+
+function format_file_size(int $bytes): string
+{
+    $units = ['B', 'KB', 'MB', 'GB'];
+    $size = $bytes;
+    $unitIndex = 0;
+
+    while ($size >= 1024 && $unitIndex < count($units) - 1) {
+        $size /= 1024;
+        $unitIndex++;
+    }
+
+    return sprintf('%.1f %s', $size, $units[$unitIndex]);
 }
 
 function read_json_file(string $path): array
@@ -126,6 +148,26 @@ function cleanup_expired_sessions(): void
             $logger->info('Expired session removed', ['session_id' => $session['session_id'] ?? basename($file, '.json')]);
         }
     }
+}
+
+function hash_optional_password(string $password): ?string
+{
+    $trimmed = trim($password);
+    return $trimmed === '' ? null : password_hash($trimmed, PASSWORD_DEFAULT);
+}
+
+function verify_optional_password(?string $hash, string $password): bool
+{
+    if ($hash === null || $hash === '') {
+        return true;
+    }
+
+    return password_verify($password, $hash);
+}
+
+function requires_session_password(array $session): bool
+{
+    return !empty($session['security']['viewer_password_hash']);
 }
 
 function handle_upload(array $uploadedFile): array
@@ -184,4 +226,14 @@ function get_base_url(): string
     }
 
     return rtrim($scheme . '://' . $host . ($scriptDir !== '' ? $scriptDir : ''), '/');
+}
+
+function presenter_url(string $sessionId, string $token): string
+{
+    return get_base_url() . '/presenter.php?session=' . urlencode($sessionId) . '&token=' . urlencode($token);
+}
+
+function viewer_url(string $joinCode): string
+{
+    return get_base_url() . '/viewer.php?code=' . urlencode($joinCode);
 }

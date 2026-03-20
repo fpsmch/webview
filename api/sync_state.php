@@ -9,7 +9,7 @@ cleanup_expired_sessions();
 $manager = new SessionManager();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $sessionId = sanitize_string($_GET['session'] ?? '');
+    $sessionId = sanitize_string($_GET['session'] ?? '', 64);
     $session = $manager->getBySessionId($sessionId);
 
     if ($session === null) {
@@ -25,9 +25,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         json_response(['success' => false, 'message' => 'Invalid JSON payload.'], 400);
     }
 
-    $sessionId = sanitize_string((string)($payload['session_id'] ?? ''));
-    if ($sessionId === '') {
-        json_response(['success' => false, 'message' => 'Session ID is required.'], 422);
+    $sessionId = sanitize_string((string)($payload['session_id'] ?? ''), 64);
+    $presenterToken = sanitize_string((string)($payload['presenter_token'] ?? ''), 128);
+    if ($sessionId === '' || $presenterToken === '') {
+        json_response(['success' => false, 'message' => 'Session ID and presenter token are required.'], 422);
+    }
+
+    $existingSession = $manager->getBySessionId($sessionId);
+    if ($existingSession === null || !$manager->presenterAuthorized($existingSession, $presenterToken)) {
+        app_logger()->error('Unauthorized state sync attempt', ['session_id' => $sessionId]);
+        json_response(['success' => false, 'message' => 'Presenter authorization failed.'], 403);
     }
 
     $session = $manager->updateState($sessionId, $payload['state'] ?? []);
